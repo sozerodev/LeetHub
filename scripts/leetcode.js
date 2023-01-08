@@ -1,146 +1,3 @@
-// local storage for question titles
-class LHLocalStorage{
-  partitionBaseName = 'lh-storage'; // base name used for partition
-  storage = window.localStorage;
-  partitions; // chrome's localstorage can hold at most 2KB per key:value pair
-  partitionMaxSize = 1900; // holds at max 2KB (1.9KB to be safe) per key:value pair
-
-  constructor(){
-    var p = 0
-    // check how many partitons of lh-storage exists
-    while(this.storage.getItem(`${this.partitionBaseName}-${p}`) != null){
-      p ++;
-    }
-    this.partitions = p // we have p partitions of 2KB, starting from "lh-storage-0"
-    console.log(`current partitions: ${this.partitions}`)
-  }
-  
-  // private method (shouldn't be used outside this scope)
-  // Method returns question data from local storage partition if partition exists.
-  getPartitionData = (partitionName) => {
-    const questionData = this.storage.getItem(partitionName)
-    if(questionData == null){
-      // partition does not exists (should never be the case)
-      console.log(`partition ${partitionName} does not exist!`)
-      return null;
-    }
-    return questionData
-  }
-
-  // private method (shouldn't be used outside this scope)
-  // Method returns size of partition data (in bytes)
-  // should only be called if partition is present
-  getPartitionSize = (partitionName) => unescape(
-    encodeURIComponent(this.getPartitionData(partitionName))
-  ).length;
-
-  
-  // private method (shouldn't be used outside this scope)
-  // Method returns first available partition name. If all partitions are full, creates new one
-  firstAvailablePartition = (payload) => {
-    var p = 0;
-    const payloadSize = unescape(encodeURIComponent(payload)).length // size of data we want to put into partition
-    while(p < this.partitions){
-      // check to see if partition isn't too big to include the new data with itself
-      const questionData = this.getPartitionData(`${this.partitionBaseName}-${p}`)
-      if(questionData != null && 
-        this.getPartitionSize(`${this.partitionBaseName}-${p}`) + payloadSize <= this.partitionMaxSize
-      ){
-        return `${this.partitionBaseName}-${p}`
-      }
-      p++
-    }
-    // no partitions available - create new partition
-    return this.generatePartition()
-  }
-
-  // private method (shouldn't be used outside this scope)
-  // Method generates a new partition and returns the partition name (key in local storage)
-  generatePartition = () => {
-    let partitionData = '';
-    const newPartitionName = `${this.partitionBaseName}-${this.partitions}` 
-    this.storage.setItem(newPartitionName, partitionData) // creates new partition
-    this.partitions++ // increment partitions
-    return newPartitionName
-  }
-
-
-  /**
-   * Checks to see if question title is stored in local storage and returns full title. If not present in local storage, returns null
-   * 
-   * @param {string} name The name of the question as defined by LeetCode (not slug format)
-   * For example, for "1. Two Sum: Easy", name should be "Two Sum"
-   * @returns {Array[string]} The title of the problem [0] and its difficulty [1]. Eg. ("X. Question Name", "Easy")
-   */
-  getQuestionTitle(name){
-    // make regex query across all partitions
-    var p = 0;
-    while(p < this.partitions){
-      const questionData = this.getPartitionData(`${this.partitionBaseName}-${p}`)
-      // question data is a massive string that contains name and numbers of leetcode questions
-      // previously stored on the local machine. It should follow the structure '1. Two Sum: Easy; 2. ...'
-      if(questionData){
-        let match = questionData.match(
-          new RegExp(`(\\d+[.]\\s${name}):\\s(Easy|Medium|Hard)`, "i")
-        ) // find match
-        if(match){
-          return match.slice(1) // eg. returns ('1. Two Sum', 'Easy')
-        }
-      }
-      p++
-    }
-    // question not present in any partitions
-    return null;
-  }
-
-  /**
-   * Adds the full question title into localstorage in the first available partition
-   * 
-   * @param {string} title The title (with number) of the question as defined by LeetCode (not slug format)
-   * For example, for Two Sum, the title should be "1. Two Sum: Easy"
-   * @returns {int} Status of upload. 0 means all went well. 1 means something went wrong. 2 means title
-   *  already exists in local storage
-   */
-  setQuestionTitle(title){
-    if(!title.match(
-      new RegExp(`(\\d+[.]\\s(.*)):\\s(Easy|Medium|Hard)`, "i")
-    )){
-      console.error(`Title ${title} does not match the pattern /(\\d+[.]\\(.*)):\\s(Easy|Medium|Hard)/i`)
-      return 1;
-    }
-
-    // check if it isn't already in local storage
-    let splitTitle = title.split(/\d+[.][\s]?(.*):\s(Easy|Medium|Hard)/)
-    const questionName = splitTitle[1]
-    if(this.getQuestionTitle(questionName)){
-      console.log(`Question ${title} has already been cached.`)
-      return 2;
-    }
-    
-    // find earliest available partition
-    const payload = `${title}; `
-    let currPartition = this.firstAvailablePartition(payload)
-
-    // add payload to partition
-    try{
-      let modifiedPartitionData = this.storage.getItem(currPartition) + payload
-      this.storage.setItem(currPartition, modifiedPartitionData);
-      console.log(`successfuly saved title: ${title}`)
-      return 0
-    }
-    catch(err){
-      if (err.name === 'QuotaExceededError') {
-        // partition is full (theoretially should never happen as new partition is made)
-        console.error('"FIRST AVAILABLE PARTITION" IS FULL')
-      }
-      else{
-        throw err; // could be something else
-      }
-      return 1;
-    }
-  }
-}
-
 /* Enum for languages supported by LeetCode. */
 const languages = {
   Python: '.py',
@@ -169,9 +26,6 @@ const readmeMsg = 'Create README - LeetHub';
 const discussionMsg = 'Prepend discussion post - LeetHub';
 const createNotesMsg = 'Attach NOTES - LeetHub';
 
-// cache the base URL html file used for parsing question details with the new LeetCode UI
-let newPageHTML = '';
-
 // problem types
 const NORMAL_PROBLEM = 0;
 const EXPLORE_SECTION_PROBLEM = 1;
@@ -181,37 +35,10 @@ let difficulty = '';
 
 /* state of upload for progress */
 let uploadState = { uploading: false };
-let uploaded = false;
-
-// leecode quesiton title cache (LHLocalStorage)
-// only initialised when either question title is detected or needed.
-let LHStorage = null;
-let titleCached = false;
-
-// generate HTML file for parsing question details with the new LeetCode UI
-async function generateBasePage(questionUrl){
-  // get base URL of leetcode problem
-  if (questionUrl.includes('/submissions/')) {
-    questionUrl = questionUrl.replace(/\/submissions\/.*/, '/description/')
-  }
-  /* 
-    Many of the question details such as question title and difficulty is found in the
-    HTML file at the question base URL, under a script with the id "__NEXT_DATA__"
-    we can either query the entire html text which includes the script details or make
-    a DOM object, select the script, and query from that text.
-  */
-  // make a http request to the base URL to get html file
-  let basePage = await fetch(questionUrl, {method: "GET"})
-  let questionData = await basePage.text()
-
-  let script = questionData.match(/<script id="__NEXT_DATA__".*>.*<\/script>/)
-  
-  return script ? script[0] : null;
-}
 
 /* Get file extension for submission */
 function findLanguage() {
-  var tag = [
+  const tag = [
     ...document.getElementsByClassName(
       'ant-select-selection-selected-value',
     ),
@@ -224,15 +51,6 @@ function findLanguage() {
         return languages[elem]; // should generate respective file extension
       }
     }
-  }
-  else{
-    // user may be using new version of LeetCode
-    // returns an array of language tags submitted. first and last instance is the most recent submission
-    tag = Array.from(document.querySelectorAll('span[class*="leading-"]')).filter(elem => elem.textContent in languages)
-    if(!checkElem(tag)){ // something went wrong
-      return null
-    }
-    return languages[tag[0].textContent] // should generate respective file extension
   }
   return null;
 }
@@ -460,7 +278,7 @@ function findCode(
   } else {
     // for a submission in explore section
     const submissionRef = document.getElementById('result-state');
-    submissionURL = submissionRef?.href;
+    submissionURL = submissionRef.href;
   }
 
   console.log(`submission URL: ${submissionURL}`)
@@ -550,34 +368,6 @@ function findCode(
     xhttp.open('GET', submissionURL, true);
     xhttp.send();
   }
-  else{
-    // user may be using newer version of Leetcode.
-    // when submitted, user is directed to submission page with the code already present
-    // therefore we don't need to make a http request.
-
-    // code can be found from the <code> tag
-    code = ""
-    Array.from(document.querySelectorAll("code")[0]?.children).forEach((line) => {code += `${line.textContent}`})
-    
-    if(!msg){
-      // TODO: get statistics from submission page for new explore section??
-      return null;
-    }
-
-    if (code != null) {
-      setTimeout(function () {
-        uploadGit(
-          btoa(unescape(encodeURIComponent(code))),
-          problemName,
-          fileName,
-          msg,
-          action,
-          true,
-          cb,
-        );
-      }, 2000);
-    }
-  }
 }
 
 /* Main parser function for the code */
@@ -617,7 +407,7 @@ function convertToSlug(string) {
     .replace(/^-+/, '') // Trim - from start of text
     .replace(/-+$/, ''); // Trim - from end of text
 }
-async function getProblemNameSlug() {
+function getProblemNameSlug() {
   const questionElem = document.getElementsByClassName(
     'content__u3I1 question-content__JfgR',
   );
@@ -634,40 +424,6 @@ async function getProblemNameSlug() {
     let qtitle = document.getElementsByClassName('question-title');
     if (checkElem(qtitle)) {
       questionTitle = qtitle[0].innerText;
-    }
-  }
-  else{
-    // user may be using newer version of LeetCode
-    // check if problem title is stored in local storage
-    const questionName = document.title.split(/(.*) - LeetCode/i)[1]
-    LHStorage = LHStorage ? LHStorage : new LHLocalStorage()// initialise if not already initialised
-    let qtitle = LHStorage.getQuestionTitle(questionName)
-    if(qtitle){
-      questionTitle = qtitle[0]
-      console.log("got question title from cache!")
-    }
-    else{ 
-      // FALLBACK IF NOT CACHED, make HTTP request to attempt. 
-      // This method only works ~40% of the time (for some reason)
-      
-      // get the script from the html file at the base URL
-      if(!newPageHTML){
-        newPageHTML = await generateBasePage(window.location.href);
-      }
-      // if newPageHTML returns null, return an error.
-      if(!newPageHTML){
-        console.error("Cannot find title of leetcode problem.")
-        return;
-      }
-  
-      // from the html text, get title and difficulty of question
-      let questionNo = RegExKeyMatch("questionFrontendId", newPageHTML)
-      if(!questionNo){ // user may be using explore section or something went wrong
-        // TODO: generate question title from 
-        return null;
-      }
-      
-      questionTitle = `${questionNo}. ${questionName}`
     }
   }
   return addLeadingZeros(convertToSlug(questionTitle));
@@ -754,40 +510,33 @@ async function parseQuestion() {
   }
   else{
     // user is using new version of LeetCode
-    const questionName = document.title.split(/(.*) - LeetCode/i)[1]
-    LHStorage = LHStorage ? LHStorage : new LHLocalStorage()// initialise if not already initialised
-    let questionTitle = LHStorage.getQuestionTitle(questionName)
-    if(questionTitle){
-      [qtitle, difficulty] = questionTitle
-      console.log("got question title and difficulty from cache!")
-    }
-    else{
-      // FALLBACK IF NOT CACHED, make HTTP request to attempt. 
-      // This method only works ~40% of the time (for some reason)
-      // get the html text from the base URL
-      if(!newPageHTML){
-        newPageHTML = await generateBasePage(window.location.href);
-      }
-      // if newPageHTML returns null, return an error.
-      if(!newPageHTML){
-        console.error("Cannot find description of leetcode problem.")
-        return;
-      }
-      // from the html text, get title and difficulty of question
-      let questionNo = RegExKeyMatch("questionFrontendId", newPageHTML)
-      difficulty = RegExKeyMatch("difficulty", newPageHTML)
-  
-      if(!(questionNo || questionName)){ // either using explore section or something went wrong
-        // TODO: look for the explore question data 
-        return null;
-      }
-      
-      // form title and get question description
-      qtitle = `${questionNo}. ${questionName}`
-    }
     
+    /* 
+     Many of the question details such as question title and difficulty is found in the
+     HTML file at the question base URL, under a script with the id "__NEXT_DATA__"
+     we can either query the entire html text which includes the script details or make
+     a DOM object, select the script, and query from that text. I chose the former, but this
+     can be changed if the latter is more efficient
+    */
+
+    // make a http request to the base URL to get html file
+    let basePage = await fetch(questionUrl, {method: "GET"})
+    let questionData = await basePage.text()
+    
+    // from the html text, get title and difficulty of question
+    let questionNo = RegExKeyMatch("questionFrontendId", questionData)
+    let questionName = RegExKeyMatch("title", questionData)
+    difficulty = RegExKeyMatch("difficulty", questionData)
+
+    // form title and get question description
+    qtitle = `${questionNo}. ${questionName}`
     qbody = document.head.querySelector('meta[name="description"]').content
     
+    if(!qtitle){ // either using explore section or something went wrong
+      // TODO: look for the explore question data 
+      return null;
+    }
+
     // Final formatting of the contents of the README for each problem
     const markdown = `<h2><a href="${questionUrl}">${qtitle}</a></h2><h3>${difficulty}</h3><hr>${qbody}`;
     return markdown;
@@ -879,75 +628,9 @@ document.addEventListener('click', (event) => {
   }
 });
 
-// Leetcode's new UI means that we cannot obtain notes on description page when on submission page
-// This generates a submission button to allow users to manually submit notes on the submission page.
-function generateNoteSubmissionButton(){
-  // find anchor for note submission
-  const noteSection = Array.from(document.querySelectorAll("textarea")).filter(
-    elem => elem.getAttribute("name") == "notes"
-  );
-  if(checkElem(noteSection)){
-    // get style from submit button
-    style = Array.from(document.getElementsByTagName("button")).filter(
-      elem => elem.classList.contains("bg-green-s")
-    )[0]?.className;
-    // place new button with this style under the note section
-    submitNotesButton = document.createElement("button");
-    submitNotesButton.appendChild(document.createTextNode("Submit Notes - LeetHub")); // adds text to button
-    submitNotesButton.className = `${style} leethub-notes-submission`; // add submit button's style as well as an indicator class
-    submitNotesButton.style.cssText += "margin: 1em 0;";// add some margin for space
-    submitNotesButton.addEventListener("click", onNoteSubmission); // add event listener
-
-    noteSection[0].after(submitNotesButton); // insert button
-    return submitNotesButton;
-  }
-
-  return null;
-}
-
-// Leetcode's new UI means that we cannot obtain notes on description page when on submission page
-// This runs once the note submission button is clicked.
-async function onNoteSubmission(e){
-  const button = e.target;
-  if(button.classList.contains("cursor-not-allowed")){
-    // button disabled (maybe user already uploaded to GitHub)
-    console.log("button is disabled");
-    return;
-  }
-  button.className += ' cursor-not-allowed opacity-50'; // leetcode's classes for disabled buttons
-  // get notes from textarea before the button
-  const notes = button.previousSibling?.textContent;
-  if(!notes){
-    console.error("cannot find notes section");
-    return;
-  }
-  // If there's any notes, upload it to git
-  if (notes.length > 0) {
-    let problemName = await getProblemNameSlug();
-    setTimeout(function () {
-      if (notes != undefined && notes.length != 0) {
-        console.log('Create Notes');
-        // means we can upload the notes too
-        uploadGit(
-          btoa(unescape(encodeURIComponent(notes))),
-          problemName,
-          'NOTES.md',
-          createNotesMsg,
-          'upload',
-        );
-      }
-    }, 500);
-  }
-  else{
-    console.log("no notes added")
-    button.className = button.className.remove(/ cursor-not-allowed opacity-50/)
-  }
-}
-
 /* function to get the notes if there is any
  the note should be opened atleast once for this to work
  this is because the dom is populated after data is fetched by opening the note */
-// TODO: update function to support both old and new LeetCode UI
 function getNotesIfAny() {
   // there are no notes on expore
   if (document.URL.startsWith('https://leetcode.com/explore/'))
@@ -975,80 +658,21 @@ function getNotesIfAny() {
       }
     }
   }
-  else{
-    // user may be using new version of LeetCode
-    if(!checkElem(
-      document.getElementsByClassName("leethub-notes-submission")
-    )){
-      // generate a button for submitting notes
-      let button = setTimeout(generateNoteSubmissionButton(), 500)
-      if(!button){
-        console.error("could not generate button");
-      }
-    }
-  }
   return notes.trim();
 }
 
-// listens for an indicator that we are on the description page of a problem. If so, 
-// initialises the LeetHub LocalStorage class to cache the question title and difficulty
-function checkForTitle(){
-  // check to see if problem title is visible (eg. if user on description page)
-  const qNameOld = document.getElementsByClassName('css-v3d350');
-  const qNameNew = Array.from(document.querySelectorAll("span.mr-2")).filter(
-    elem => elem.textContent.match(/\d+[.][\s]?.*/)
-  )
-  qName = (
-    checkElem(qNameOld) ? qNameOld : null || 
-    checkElem(qNameNew) ? qNameNew : null || 
-    []
-  )
-  if(checkElem(qName)){
-    // check question difficulty
-    const isHard = (
-      checkElem(document.getElementsByClassName('css-t42afm')) ||
-      checkElem(document.querySelectorAll('div.bg-pink.capitalize'))
-    );
-    const isMedium = (
-      checkElem(document.getElementsByClassName('css-dcmtd5')) ||
-      checkElem(document.querySelectorAll('div.bg-yellow.capitalize'))
-    )
-    const isEasy = (
-      checkElem(document.getElementsByClassName('css-14oi08n')) ||
-      checkElem(document.querySelectorAll('div.bg-olive.capitalize'))
-    )
-  
-    difficulty = (
-      isEasy ? 'Easy' : null ||
-      isMedium ? 'Medium': null ||
-      isHard ? 'Hard' : null
-    )
-
-    LHStorage = new LHLocalStorage() // hover over object methods for descriptions
-    LHStorage.setQuestionTitle(`${qName[0].textContent}: ${difficulty}`) // FOLLOW 'X. Problem Name: Difficulty'
-    titleCached = true;
-  }
-}
-
 const loader = setInterval(async () => {
-  if(!titleCached){ // check if title is visible to cache
-    checkForTitle()
-  }
-  if(uploaded){ // do not reupload once uploaded
-    return;
-  }
-
   let code = null;
   let probStatement = null;
   let probStats = null;
   let probType;
 
-  // query for old "Success" tag
+  // try get success tag for a normal problem in both old and new versions
+  
+  // returns document query if there is an element with the correct class name and content
   const successfulOld = () => {
     const successTag = document.getElementsByClassName('success__3Ai7')
 
-    // check if both the success tag exists, its accompanied by the "Success" text and it is not
-    // already processed
     return (
     checkElem(successTag) &&
     successTag[0].className === 'success__3Ai7' &&
@@ -1056,19 +680,18 @@ const loader = setInterval(async () => {
     ) ?
     successTag : null
   }
-  // query for new "Accepted" tag
+
   const successfulNew = () => {
     const successTag = Array.from(document.getElementsByClassName("text-green-s")).filter(elem => elem.querySelector("svg"))
 
-    // check if both the success icon exists, its accompanied by the "Accepted" text and it is not
-    // already processed
+    // check if both the success icon exists and it is accompanies by the "Accepted" tag
     return (
       checkElem(successTag) &&
-      !successTag[0].classList.contains("marked_as_success") &&
       successTag[0].querySelector("span")?.textContent == "Accepted"
     ) ?
     successTag : null
   }
+
   const successTag = successfulOld() || successfulNew() || [];
 
   // TODO: try get result state for an explore section problem in both old and new versions
@@ -1078,7 +701,7 @@ const loader = setInterval(async () => {
   var success = false;
   // check success tag for a normal problem
   if (
-    checkElem(successTag)
+    successTag.length
   ) {
     //console.log(successTag[0]);
     success = true;
@@ -1100,6 +723,9 @@ const loader = setInterval(async () => {
     probStats = parseStats();
   }
 
+  console.log(probStatement)
+  console.log(probStats)
+
   if (probStatement !== null) {
     switch (probType) {
       case NORMAL_PROBLEM:
@@ -1113,7 +739,7 @@ const loader = setInterval(async () => {
         return;
     }
 
-    const problemName = await getProblemNameSlug();
+    const problemName = getProblemNameSlug();
     const language = findLanguage();
     if (language !== null) {
       // start upload indicator here
@@ -1145,7 +771,6 @@ const loader = setInterval(async () => {
 
       /* get the notes and upload it */
       /* only upload notes if there is any */
-      // NOTE: getNotesIfAny currently supportes only LeetCode's old UI
       notes = getNotesIfAny();
       if (notes.length > 0) {
         setTimeout(function () {
@@ -1254,7 +879,6 @@ function startUpload() {
 
 /* This will create a tick mark before "Run Code" button signalling LeetHub has done its job */
 function markUploaded() {
-  uploaded = true;
   elem = document.getElementById('leethub_progress_elem');
   if (elem) {
     elem.className = '';
